@@ -12,6 +12,8 @@ from ast import literal_eval
 from datetime import datetime
 from math import ceil
 import random
+from collections import Counter
+from multiprocessing import Pool
 #other installed libraries
 from matplotlib import pyplot as plt
 from scipy.sparse import lil_matrix
@@ -908,15 +910,28 @@ class quantinuum_teleportation:
             for gap, path_dict in counts_dict.items():
                 for path, basis_dict in path_dict.items():
                     measurements_order = path
-                    for basis, counts in basis_dict.items():
-                        #pvec_mit = find_closest_pvec(pvec_mit)
-                        counts_mit = self.apply_reduced_qrem_to_counts(counts, gap, measurements_order)
-                        counts_mit = quantinuum_teleportation.find_closest_counts(counts_mit)
-                        scale_factor = sum(counts_mit.values())
-                        for outcome in counts_mit.keys():
-                            counts_mit[outcome] *= self.shots/scale_factor
+                    with Pool(9) as p:
+                        basis_list = list(basis_dict.keys())
+                        results = p.map(quantinuum_teleportation.apply_reduced_qrem_to_counts_physical_single_input, [(counts, measurements_order, self.M_list) for counts in basis_dict.values()])
+                        for i in range(len(results)):
+                            scale_factor = sum(results[i].values())
+                            for outcome in results[i].keys():
+                                results[i][outcome] *= self.shots/scale_factor
+                            print(len(results[i]))
+                            basis = basis_list[i]
+                            counts_dict_mit[gap][path][basis] = results[i]
                             
-                        counts_dict_mit[gap][path][basis] = counts_mit
+                    
+                    
+                    #for basis, counts in basis_dict.items():
+                    #    #pvec_mit = find_closest_pvec(pvec_mit)
+                    #    counts_mit = self.apply_reduced_qrem_to_counts(counts, gap, measurements_order)
+                    #    counts_mit = quantinuum_teleportation.find_closest_counts(counts_mit)
+                    #    scale_factor = sum(counts_mit.values())
+                    #    for outcome in counts_mit.keys():
+                    #        counts_mit[outcome] *= self.shots/scale_factor
+                    #        
+                    #    counts_dict_mit[gap][path][basis] = counts_mit
                         
                 print(f'{gap} done')
                 
@@ -945,7 +960,91 @@ class quantinuum_teleportation:
                             counts_dict_mit[gap][path][basis][tuple(outcome_list)] = prob*self.shots
         
         return counts_dict_mit, pvecs_dict_mit
+    
+    @staticmethod
+    def apply_reduced_qrem_to_counts_physical_single_input(inputs):
+        """Apply Reduced Quantum Readout Error Mitigation to zipped counts
+        """
+        (counts, measurements_order, M_list) = inputs
+        #mitigate_qubits = measurements_order.copy()
+        threshold = 0.00003#set minimum threshold, zero out the count if below it
+        
+        corrected_counts = copy.deepcopy(counts)
+        #iterate over each qubit
+        for idx in range(len(measurements_order)):
+            #idx = measurements_order.index(q)
+            calibration_M = la.inv(M_list[measurements_order[idx]])
+            applied_names = set([])
+            corrected_bit_strings = [k for k in corrected_counts.keys()]
+            
+            for bit_string in corrected_bit_strings:
+                bit_string_true = ''
+                for digit in bit_string:
+                    bit_string_true += str(digit)
+                bit_string_int = int(bit_string_true, 2)
+                #bit_string = bin(bit_string_int)[2:].zfill(self.nqubits)
+                bit_string_list = list(bit_string_true)
+                bit_string_list[idx] = '_'
+                #check if the bit-string (except digit q) is already been corrected
+                name = "".join(bit_string_list)
+                if name not in applied_names:
+                    applied_names.add(name)
+                    #check the digit is 0 or 1, then flip it
+                    if (bit_string_int & (1 << idx)) != 0:
+                        bit_string_list[idx] = '0'
+                    else:
+                        bit_string_list[idx] = '1'
+                    bit_string_flip = tuple([int(bit) for bit in bit_string_list])
+                    bit_string_int_flip = int("".join(bit_string_list), 2)
+                            
+                    reduced_pvec = np.zeros(2)
+                    # if 0->1
+                    if bit_string_int < bit_string_int_flip:
+                        if bit_string in corrected_counts:
+                            reduced_pvec[0] += corrected_counts[bit_string]
+                        if bit_string_flip in corrected_counts:
+                            reduced_pvec[1] += corrected_counts[bit_string_flip]
+                        reduced_pvec_mit = np.matmul(calibration_M, reduced_pvec)
+                                
+                        if abs(reduced_pvec_mit[0]) > threshold:
+                            corrected_counts[bit_string] = reduced_pvec_mit[0]
+                        #zero-out if below threshold
+                        else:
+                            corrected_counts[bit_string] = 0
+                            del corrected_counts[bit_string]
+                        if abs(reduced_pvec_mit[1]) > threshold:
+                            corrected_counts[bit_string_flip] = reduced_pvec_mit[1]
+                        #zero-out if below threshold
+                        else:
+                            corrected_counts[bit_string_flip] = 0
+                            del corrected_counts[bit_string_flip]
+                    # if 1->0
+                    else:
+                        if bit_string in corrected_counts:
+                            reduced_pvec[1] += corrected_counts[bit_string]
+                        if bit_string_flip in corrected_counts:
+                            reduced_pvec[0] += corrected_counts[bit_string_flip]
+                        reduced_pvec_mit = np.matmul(calibration_M, reduced_pvec)
+                                
+                        if abs(reduced_pvec_mit[0]) > threshold:
+                            corrected_counts[bit_string_flip] = reduced_pvec_mit[0]
+                        #zero-out if below threshold
+                        else:
+                            corrected_counts[bit_string_flip] = 0
+                            del corrected_counts[bit_string_flip]
+                        if abs(reduced_pvec_mit[1]) > threshold:
+                            corrected_counts[bit_string] = reduced_pvec_mit[1]
+                        #zero-out if below threshold
+                        else:
+                            corrected_counts[bit_string] = 0
+                            del corrected_counts[bit_string]
 
+        print(f'{len(corrected_counts)}')
+        
+        corrected_counts = quantinuum_teleportation.find_closest_counts(corrected_counts)
+        return corrected_counts
+    
+    
 
     def apply_reduced_qrem_to_counts(self, counts, gap, measurements_order):
         """Apply Reduced Quantum Readout Error Mitigation to zipped counts
@@ -1152,7 +1251,8 @@ class quantinuum_teleportation:
         
         return pvecs_binned
     
-    def recon_teleported_density_mats(self, mode = 'post select', time_str='', qrem_time_str='', apply_mit='QREM', mitigate_qubits = [1,3,4,5]):
+    def recon_teleported_density_mats(self, mode = 'post select', time_str='', qrem_time_str='', apply_mit='QREM', mitigate_qubits = [1,3,4,5],
+                                      bootstrap=False, resample_num=10):
         """
         Reconstruct density matrices of the teleported two-qubit graph state
         """
@@ -1171,6 +1271,34 @@ class quantinuum_teleportation:
                                                                   mitigate_qubits = mitigate_qubits)
             print('reduced_QREM done')
 
+        if bootstrap is True:
+            pvecs_new = {gap: {path: {basis: [] 
+                                      for basis in basis_dict.keys()} 
+                               for path, basis_dict in path_dict.items()} 
+                         for gap, path_dict in pvecs.items()}
+            
+            for gap, path_dict in qst_counts.items():
+                for path, basis_dict in path_dict.items():
+                    for basis, counts in basis_dict.items():
+                        outcome_tuple, count = zip(*counts.items())
+                        new_samples = random.choices(outcome_tuple, count, k=self.shots*resample_num)
+                        new_samples_dict_list = [Counter(new_samples[i*self.shots: (i+1)*self.shots]) for i in range(resample_num)]
+                        new_pvecs_list = []
+                        
+                        for i in range(resample_num):
+                            pvec = np.zeros(4)
+                            for outcome, count in new_samples_dict_list[i].items():
+                                bit_str = ''
+                                for digit in outcome:
+                                    bit_str += str(digit)
+                                idx = int(bit_str, 2)
+                                pvec[idx] += count
+                            pvec /= self.shots
+                            new_pvecs_list.append(pvec)
+                        
+                        pvecs_new[gap][path][basis] = new_pvecs_list
+        
+        
         #calculate density matrices
         if mode == 'post select' or mode == 'extended post select':
             #categorise
@@ -1185,11 +1313,24 @@ class quantinuum_teleportation:
             return rho_dict
         
         else:
-            rho_dict = {}
-            for gap, path_dict in pvecs.items():
-                rho_dict[gap] = {}
-                for path, basis_dict in path_dict.items():
-                    rho_dict[gap][path] = quantinuum_teleportation.calc_rho(basis_dict)
+            if bootstrap is True:
+                rho_dict = {}
+                for gap, path_dict in pvecs_new.items():
+                    rho_dict[gap] = {}
+                    for path, basis_dict in path_dict.items():
+                        rho_dict[gap][path] = []
+                        for i in range(resample_num):
+                            basis_dict_i = {}
+                            for basis, pvecs_list in basis_dict.items():
+                                basis_dict_i[basis] = pvecs_list[i]
+                            rho_dict[gap][path].append(quantinuum_teleportation.calc_rho(basis_dict_i))
+            
+            else:
+                rho_dict = {}
+                for gap, path_dict in pvecs.items():
+                    rho_dict[gap] = {}
+                    for path, basis_dict in path_dict.items():
+                        rho_dict[gap][path] = quantinuum_teleportation.calc_rho(basis_dict)
             return rho_dict
     
     @staticmethod
@@ -1414,12 +1555,16 @@ class quantinuum_teleportation:
         return rho_physical
     
 def calc_teleported_negativities(rho_dict, output='all', mode = 'post select',
-                                 witness = 'negativity'):
+                                 witness = 'negativity', bootstrap = False):
     
     ent_all = copy.deepcopy(rho_dict)# Negativities for each bin per experiment
-    ent_mean = {gap: {path: 0 
-                      for path in path_dict.keys()} 
-                for gap, path_dict in rho_dict.items()} # Mean negativity between bins per experiment
+    if bootstrap is True:
+        ent_mean = {gap: {path: [] for path in path_dict.keys()} 
+                    for gap, path_dict in rho_dict.items()} # Mean negativity between bins per experiment
+    else:
+        ent_mean = {gap: {path: 0 
+                          for path in path_dict.keys()} 
+                    for gap, path_dict in rho_dict.items()} # Mean negativity between bins per experiment
     ent_max = copy.deepcopy(ent_mean) # Max negativity between bins per experiment
     ent_min = copy.deepcopy(ent_mean)
     
@@ -1440,10 +1585,17 @@ def calc_teleported_negativities(rho_dict, output='all', mode = 'post select',
                     ent_min[gap][path] = min(ent_list)
                 
         else:
-            for gap, path_dict in rho_dict.items():
-                for path, rho in path_dict.items():
-                    ent = calc_n(rho)
-                    ent_mean[gap][path] = ent
+            if bootstrap is True:
+                for gap, path_dict in rho_dict.items():
+                    for path, rho_list in path_dict.items():
+                        for rho in rho_list:
+                            ent = calc_n(rho)
+                            ent_mean[gap][path].append(ent)
+            else:
+                for gap, path_dict in rho_dict.items():
+                    for path, rho in path_dict.items():
+                        ent = calc_n(rho)
+                        ent_mean[gap][path] = ent
     
     elif witness == 'fidelity':
         if mode == 'post select' or mode == 'extended post select':
@@ -1462,10 +1614,17 @@ def calc_teleported_negativities(rho_dict, output='all', mode = 'post select',
                     ent_min[gap][path] = min(ent_list)
                 
         else:
-            for gap, path_dict in rho_dict.items():
-                for path, rho in path_dict.items():
-                    ent = calc_f(rho)
-                    ent_mean[gap][path] = ent
+            if bootstrap is True:
+                for gap, path_dict in rho_dict.items():
+                    for path, rho_list in path_dict.items():
+                        for rho in rho_list:
+                            ent = calc_f(rho)
+                            ent_mean[gap][path].append(ent)
+            else:
+                for gap, path_dict in rho_dict.items():
+                    for path, rho in path_dict.items():
+                        ent = calc_f(rho)
+                        ent_mean[gap][path] = ent
             
     elif witness == 'entropy':
         if mode == 'post select' or mode == 'extended post select':
@@ -1484,10 +1643,17 @@ def calc_teleported_negativities(rho_dict, output='all', mode = 'post select',
                     ent_min[gap][path] = min(ent_list)
                 
         else:
-            for gap, path_dict in rho_dict.items():
-                for path, rho in path_dict.items():
-                    ent = calc_s(rho)
-                    ent_mean[gap][path] = ent
+            if bootstrap is True:
+                for gap, path_dict in rho_dict.items():
+                    for path, rho_list in path_dict.items():
+                        for rho in rho_list:
+                            ent = calc_s(rho)
+                            ent_mean[gap][path].append(ent)
+            else:
+                for gap, path_dict in rho_dict.items():
+                    for path, rho in path_dict.items():
+                        ent = calc_s(rho)
+                        ent_mean[gap][path] = ent
             
     if output == 'all':
         return ent_all

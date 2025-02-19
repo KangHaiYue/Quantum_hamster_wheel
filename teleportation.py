@@ -17,8 +17,9 @@ import numpy as np
 import numpy.linalg as la
 import networkx as nx
 # Qiskit libraries
-from qiskit import QuantumCircuit, ClassicalRegister, Aer, execute, transpile
-from qiskit.providers.aer.noise import NoiseModel
+#from qiskit import QuantumCircuit, ClassicalRegister, Aer, execute, transpile
+from qiskit import QuantumCircuit, ClassicalRegister, transpile
+#from qiskit.providers.aer.noise import NoiseModel
 from qiskit.circuit.library import RZGate
 #from qiskit_aer import NoiseModel
 from qiskit.transpiler import PassManager, InstructionDurations
@@ -579,6 +580,26 @@ class Teleportation(Free_EntangleBase):
 
         return circ
     
+    def gen_chain_graphstate_circuit_raw(self, num_q):
+        """Generate a graph state on a simple path, without any device path yet
+        """
+        circ = QuantumCircuit(num_q)
+        connection_order = list(range(num_q))
+
+        # Apply Hadamard gates to every qubit
+        circ.h(connection_order)
+        # Connect every edge with cz gates
+        pi = 3.141592653589793
+        for i in range(0,len(connection_order)-1,2):
+            circ.cz(connection_order[i], connection_order[i+1])
+            #circ.cp(pi, connection_order[i], connection_order[i+1])
+        for i in range(1,len(connection_order)-1,2):
+            circ.cz(connection_order[i], connection_order[i+1])
+            #circ.cp(pi,connection_order[i], connection_order[i+1])
+
+        return circ
+        
+        
     def gen_two_qubit_graphstate_circuit(self, qubit_a, qubit_b):
         """Generate a graph state with only 2 qubits (nearest neighbour)
 
@@ -673,6 +694,50 @@ class Teleportation(Free_EntangleBase):
             
         self.teleported_BellState_circuits = BellState_circuits
         return BellState_circuits
+    
+    def gen_teleported_BellState_circuit_raw(self, post_processing = True):
+        """Generate raw Teleportation circuit without real device mapping, no QST yet
+
+        Args:
+            post_processing (bool, optional): _description_. Defaults to True.
+
+        Returns:
+            dictionary: dictionary of teleportation circuit
+        """
+        #Make sure the measurement basis for each pair of qubits (and intermediate qubits) are found
+        self.post_processing = post_processing
+        if self.teleportation_basis is None:
+            self.teleportation_basis = self.gen_teleportation_basis()
+        
+        BellState_circuits_raw = {}  
+        
+        #graphstate = self.circuit.copy()
+        #graphstate.barrier()
+        
+        for gap in self.teleportation_basis.keys():
+            virtual_qubits = list(range(gap+2))
+            graphstate = self.gen_chain_graphstate_circuit_raw(gap+2)
+            graphstate.barrier(virtual_qubits)
+            
+            circ = graphstate.copy()
+            crX = ClassicalRegister(gap)
+            circ.add_register(crX)
+            
+            circ.h(virtual_qubits[1:-1])
+            circ.measure(virtual_qubits[1:-1], crX)
+            
+            if post_processing is False:
+
+                for i in range(gap)[::-1]:
+                    #with circ.if_test((crX[i],1)):
+                    circ.x(virtual_qubits[-1])
+                    #circ.x(qubit_pair[1]).c_if(crX[i],1)
+                    circ.h(virtual_qubits[-1])
+            
+            BellState_circuits_raw[gap] = circ
+        
+        return BellState_circuits_raw
+    
     
     def gen_swap_BellState_circuit(self):
         """generate BellState transferring circuit (moving one qubit away by SWAP gates)
@@ -1779,6 +1844,8 @@ class Teleportation(Free_EntangleBase):
         # If circuits are executed on a simulator or real backend
         if sim is None:
             job = execute(circ_list, backend=self.backend, shots=shots, initial_layout=list(range(self.device_size)), optimization_level=1)
+            #circ_list_transpiled = transpile(circ_list, backend=self.backend, initial_layout=list(range(self.device_size)), optimization_level=1)
+            #job = self.backend.run(job, shots=shots)
         elif sim == "ideal":
             backend = Aer.get_backend('aer_simulator')
             job = execute(circ_list, backend=backend, 

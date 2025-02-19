@@ -8,8 +8,9 @@ Last Modified on 19 August, 2023
 # Standard libraries
 from numpy import array, kron
 # Qiskit libraries
-from qiskit import IBMQ
+#from qiskit import IBMQ
 from qiskit_ibm_provider import IBMProvider
+from qiskit_ibm_runtime import QiskitRuntimeService
 import mthree
 
 # Pytket libraries
@@ -20,21 +21,21 @@ from token_id import token_id
 token = token_id
 
 
-def startup(check=False, token=token, hub='ibm-q-melbourne', group='unimelb', project='hub'):
-    """Start up session"""
-    if IBMQ.active_account() is None:
-        IBMQ.enable_account(token)
-        print("Account enabled")
-    else:
-        print("Account already enabled")
-    
-    provider = IBMQ.get_provider(hub=hub, group=group, project=project)
-    print('Provider:', f'{hub}-{group}-{project}')
-    
-    if check:
-        check_provider(hub=hub, group=group, project=project)
+#def startup(check=False, token=token, hub='ibm-q-melbourne', group='unimelb', project='hub'):
+#    """Start up session"""
+#    if IBMQ.active_account() is None:
+#        IBMQ.enable_account(token)
+#        print("Account enabled")
+#    else:
+#        print("Account already enabled")
+#    
+#    provider = IBMQ.get_provider(hub=hub, group=group, project=project)
+#    print('Provider:', f'{hub}-{group}-{project}')
+#    
+#    if check:
+#        check_provider(hub=hub, group=group, project=project)
             
-    return provider
+#    return provider
 
 def IBM_startup(token = token):
     """Start up session"""
@@ -48,21 +49,31 @@ def IBM_startup(token = token):
             
     return provider
 
+def Runtime_startup(token=token):
+    try:
+        service = QiskitRuntimeService()
+    
+    except:
+        QiskitRuntimeService.save_account(token=token)
+        service = QiskitRuntimeService()
+    
+    return service
+
 #def Quantinuum_startup(device='H1-1SC'):
 #    backend=QuantinuumBackend(device_name=device)#,provider='Microsoft')
 #    backend.login()
 #    return backend
 
-def check_provider(hub='ibm-q-melbourne', group='unimelb', project='hub'):
-    """Check list of providers with queue size and qubit count for input hub"""
-    provider = IBMQ.get_provider(hub=hub, group=group, project=project)
+#def check_provider(hub='ibm-q-melbourne', group='unimelb', project='hub'):
+#    """Check list of providers with queue size and qubit count for input hub"""
+#    provider = IBMQ.get_provider(hub=hub, group=group, project=project)
     
-    for backend in provider.backends():
-        try:
-            qubit_count = len(backend.properties().qubits)
-        except:
-            qubit_count = 'simulated'
-        print(f'{backend.name()} has {backend.status().pending_jobs} queud and {qubit_count} qubits')
+#    for backend in provider.backends():
+#        try:
+#            qubit_count = len(backend.properties().qubits)
+#        except:
+#            qubit_count = 'simulated'
+#        print(f'{backend.name()} has {backend.status().pending_jobs} queud and {qubit_count} qubits')
       
       
 # Math objects
